@@ -6,88 +6,166 @@ import '../../../core/theme/app_theme.dart';
 import '../../../data/models/models.dart';
 import '../../../data/repositories/auth_repository.dart';
 import '../../../data/repositories/bg_check_repository.dart';
+import '../../shared/widgets/db_status_banner.dart';
 import '../../shared/widgets/status_badge.dart';
 
 class EmploymentHistoryScreen extends ConsumerStatefulWidget {
   const EmploymentHistoryScreen({super.key});
   @override
-  ConsumerState<EmploymentHistoryScreen> createState() => _EmploymentHistoryScreenState();
+  ConsumerState<EmploymentHistoryScreen> createState() =>
+      _EmploymentHistoryScreenState();
 }
 
-class _EmploymentHistoryScreenState extends ConsumerState<EmploymentHistoryScreen> {
-  Future<(Candidate?, List<EmploymentRecord>)> _load() async {
-    final profile = ref.read(currentProfileProvider).valueOrNull;
-    if (profile == null) return (null, <EmploymentRecord>[]);
-    final repo = ref.read(bgCheckRepoProvider);
-    final c = await repo.getOrCreateCandidate(profile.id);
-    if (c == null) return (null, <EmploymentRecord>[]);
-    final list = await repo.listEmployment(c.id);
-    return (c, list);
+class _EmploymentHistoryScreenState
+    extends ConsumerState<EmploymentHistoryScreen> {
+  Candidate? _candidate;
+  List<EmploymentRecord> _list = [];
+  bool _loading = true;
+  String? _err;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  Future<void> _openForm({EmploymentRecord? existing, required String candidateId}) async {
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _err = null;
+    });
+    try {
+      final profile = ref.read(currentProfileProvider).valueOrNull;
+      if (profile == null) {
+        setState(() {
+          _loading = false;
+          _err = 'No profile';
+        });
+        return;
+      }
+      final repo = ref.read(bgCheckRepoProvider);
+      final c = await repo.getOrCreateCandidate(profile.id);
+      final list = c == null ? <EmploymentRecord>[] : await repo.listEmployment(c.id);
+      if (!mounted) return;
+      setState(() {
+        _candidate = c;
+        _list = list;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _err = e.toString();
+      });
+    }
+  }
+
+  Future<void> _openForm({EmploymentRecord? existing}) async {
+    if (_candidate == null) return;
     await showModalBottomSheet(
-      context: context, isScrollControlled: true, useSafeArea: true,
-      builder: (_) => _EmploymentForm(existing: existing, candidateId: candidateId),
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => _EmploymentForm(
+          existing: existing, candidateId: _candidate!.id),
     );
-    setState(() {}); // refresh
+    _load();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Employment history')),
-      body: FutureBuilder(
-        future: _load(),
-        builder: (ctx, snap) {
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-          final (cand, list) = snap.data!;
-          if (cand == null) return const Center(child: Text('Profile not ready'));
-          if (list.isEmpty) {
-            return Center(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.work_off, size: 64, color: AppTheme.textSecondary),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: _build(),
+      ),
+      floatingActionButton: _candidate == null
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _openForm(),
+              icon: const Icon(Icons.add),
+              label: const Text('Add'),
+            ),
+    );
+  }
+
+  Widget _build() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_err != null) {
+      return ListView(
+        children: [
+          const DbStatusBanner(),
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              children: [
+                const Icon(Icons.error_outline,
+                    color: AppTheme.danger, size: 48),
+                const SizedBox(height: 12),
+                Text(_err!, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                    onPressed: _load,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry')),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+    if (_list.isEmpty) {
+      return ListView(
+        children: [
+          const DbStatusBanner(),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 80),
+            child: Column(
+              children: [
+                const Icon(Icons.work_off,
+                    size: 64, color: AppTheme.textSecondary),
                 const SizedBox(height: 12),
                 const Text('No employment history yet'),
                 const SizedBox(height: 16),
                 FilledButton.icon(
-                  onPressed: () => _openForm(candidateId: cand.id),
+                  onPressed: () => _openForm(),
                   icon: const Icon(Icons.add),
                   label: const Text('Add first job'),
                 ),
-              ]),
-            );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: list.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (_, i) {
-              final e = list[i];
-              final fmt = DateFormat.yMMM();
-              return Card(
-                child: ListTile(
-                  title: Text(e.positionTitle, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text(
-                      '${e.employerName} • ${fmt.format(e.startDate)} → ${e.endDate==null?"present":fmt.format(e.endDate!)}'),
-                  trailing: e.verified
-                      ? const StatusBadge(label: 'verified', color: AppTheme.success)
-                      : IconButton(icon: const Icon(Icons.edit),
-                          onPressed: () => _openForm(existing: e, candidateId: cand.id)),
-                ),
-              );
-            },
-          );
-        },
-      ),
-      floatingActionButton: FutureBuilder(
-        future: _load(),
-        builder: (_, snap) => snap.hasData && snap.data!.$1 != null
-            ? FloatingActionButton.extended(
-                onPressed: () => _openForm(candidateId: snap.data!.$1!.id),
-                icon: const Icon(Icons.add), label: const Text('Add'))
-            : const SizedBox(),
-      ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+    final fmt = DateFormat.yMMM();
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: _list.length + 1,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, i) {
+        if (i == 0) return const DbStatusBanner();
+        final e = _list[i - 1];
+        return Card(
+          child: ListTile(
+            title: Text(e.positionTitle,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: Text(
+                '${e.employerName} • ${fmt.format(e.startDate)} → '
+                '${e.endDate == null ? "present" : fmt.format(e.endDate!)}'),
+            trailing: e.verified
+                ? const StatusBadge(label: 'verified', color: AppTheme.success)
+                : IconButton(
+                    icon: const Icon(Icons.edit),
+                    onPressed: () => _openForm(existing: e),
+                  ),
+          ),
+        );
+      },
     );
   }
 }
@@ -112,21 +190,30 @@ class _EmploymentFormState extends ConsumerState<_EmploymentForm> {
   late final _reason = TextEditingController(text: widget.existing?.reasonForLeaving);
   late DateTime? _start = widget.existing?.startDate;
   late DateTime? _end = widget.existing?.endDate;
-  bool _current = false;
+  late bool _current = widget.existing?.isCurrent ?? widget.existing?.endDate == null;
   bool _saving = false;
+  String? _err;
 
   Future<void> _pickDate(bool start) async {
     final d = await showDatePicker(
       context: context,
       initialDate: (start ? _start : _end) ?? DateTime.now(),
-      firstDate: DateTime(1970), lastDate: DateTime.now(),
+      firstDate: DateTime(1970),
+      lastDate: DateTime.now(),
     );
     if (d != null) setState(() => start ? _start = d : _end = d);
   }
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate() || _start == null) return;
-    setState(() => _saving = true);
+    if (!_formKey.currentState!.validate()) return;
+    if (_start == null) {
+      setState(() => _err = 'Pick a start date');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _err = null;
+    });
     final data = {
       'candidate_id': widget.candidateId,
       'employer_name': _employer.text.trim(),
@@ -141,13 +228,20 @@ class _EmploymentFormState extends ConsumerState<_EmploymentForm> {
       'end_date': _current ? null : _end?.toIso8601String().substring(0, 10),
       'is_current': _current,
     };
-    final repo = ref.read(bgCheckRepoProvider);
-    if (widget.existing == null) {
-      await repo.addEmployment(data);
-    } else {
-      await repo.updateEmployment(widget.existing!.id, data);
+    try {
+      final repo = ref.read(bgCheckRepoProvider);
+      if (widget.existing == null) {
+        await repo.addEmployment(data);
+      } else {
+        await repo.updateEmployment(widget.existing!.id, data);
+      }
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      setState(() {
+        _saving = false;
+        _err = e.toString();
+      });
     }
-    if (mounted) Navigator.pop(context);
   }
 
   @override
@@ -163,46 +257,105 @@ class _EmploymentFormState extends ConsumerState<_EmploymentForm> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(widget.existing == null ? 'Add job' : 'Edit job',
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                  style: const TextStyle(
+                      fontSize: 20, fontWeight: FontWeight.w700)),
               const SizedBox(height: 16),
-              TextFormField(controller: _employer,
-                  decoration: const InputDecoration(labelText: 'Employer'),
-                  validator: (v) => v?.isEmpty ?? true ? 'Required' : null),
+              TextFormField(
+                controller: _employer,
+                decoration: const InputDecoration(labelText: 'Employer'),
+                validator: (v) =>
+                    v?.trim().isEmpty ?? true ? 'Required' : null,
+              ),
               const SizedBox(height: 8),
-              TextFormField(controller: _position,
-                  decoration: const InputDecoration(labelText: 'Position'),
-                  validator: (v) => v?.isEmpty ?? true ? 'Required' : null),
+              TextFormField(
+                controller: _position,
+                decoration: const InputDecoration(labelText: 'Position'),
+                validator: (v) =>
+                    v?.trim().isEmpty ?? true ? 'Required' : null,
+              ),
               const SizedBox(height: 8),
-              TextFormField(controller: _location, decoration: const InputDecoration(labelText: 'Location')),
+              TextFormField(
+                controller: _location,
+                decoration: const InputDecoration(labelText: 'Location'),
+              ),
               const SizedBox(height: 8),
-              Row(children: [
-                Expanded(child: OutlinedButton.icon(onPressed: () => _pickDate(true),
-                    icon: const Icon(Icons.calendar_today, size: 16),
-                    label: Text(_start == null ? 'Start date' : fmt.format(_start!)))),
-                const SizedBox(width: 8),
-                Expanded(child: OutlinedButton.icon(onPressed: _current ? null : () => _pickDate(false),
-                    icon: const Icon(Icons.calendar_today, size: 16),
-                    label: Text(_current ? 'present' : _end == null ? 'End date' : fmt.format(_end!)))),
-              ]),
-              CheckboxListTile(value: _current, onChanged: (v) => setState(() => _current = v ?? false),
-                  title: const Text('I currently work here')),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _pickDate(true),
+                      icon: const Icon(Icons.calendar_today, size: 16),
+                      label: Text(_start == null
+                          ? 'Start date'
+                          : fmt.format(_start!)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _current ? null : () => _pickDate(false),
+                      icon: const Icon(Icons.calendar_today, size: 16),
+                      label: Text(_current
+                          ? 'present'
+                          : _end == null
+                              ? 'End date'
+                              : fmt.format(_end!)),
+                    ),
+                  ),
+                ],
+              ),
+              CheckboxListTile(
+                value: _current,
+                onChanged: (v) => setState(() => _current = v ?? false),
+                title: const Text('I currently work here'),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+              ),
               const Divider(),
-              const Text('Supervisor (for reference)', style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Supervisor (for reference)',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
-              TextFormField(controller: _supName, decoration: const InputDecoration(labelText: 'Supervisor name')),
+              TextFormField(
+                controller: _supName,
+                decoration: const InputDecoration(labelText: 'Supervisor name'),
+              ),
               const SizedBox(height: 8),
-              TextFormField(controller: _supPhone, decoration: const InputDecoration(labelText: 'Supervisor phone')),
+              TextFormField(
+                controller: _supPhone,
+                decoration: const InputDecoration(labelText: 'Supervisor phone'),
+              ),
               const SizedBox(height: 8),
-              TextFormField(controller: _supEmail, decoration: const InputDecoration(labelText: 'Supervisor email')),
+              TextFormField(
+                controller: _supEmail,
+                decoration: const InputDecoration(labelText: 'Supervisor email'),
+              ),
               const SizedBox(height: 8),
-              TextFormField(controller: _resp, maxLines: 3,
-                  decoration: const InputDecoration(labelText: 'Responsibilities')),
+              TextFormField(
+                controller: _resp,
+                maxLines: 3,
+                decoration:
+                    const InputDecoration(labelText: 'Responsibilities'),
+              ),
               const SizedBox(height: 8),
-              TextFormField(controller: _reason, decoration: const InputDecoration(labelText: 'Reason for leaving')),
+              TextFormField(
+                controller: _reason,
+                decoration:
+                    const InputDecoration(labelText: 'Reason for leaving'),
+              ),
+              if (_err != null) ...[
+                const SizedBox(height: 12),
+                Text(_err!, style: const TextStyle(color: AppTheme.danger)),
+              ],
               const SizedBox(height: 16),
               FilledButton(
                 onPressed: _saving ? null : _save,
-                child: _saving ? const CircularProgressIndicator(color: Colors.white) : const Text('Save'),
+                child: _saving
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
+                    : const Text('Save'),
               ),
             ],
           ),
