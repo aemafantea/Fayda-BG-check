@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/models.dart';
@@ -101,9 +101,10 @@ class BgCheckRepository {
     String? backgroundCheckId,
   }) async {
     final path = '$ownerId/${DateTime.now().millisecondsSinceEpoch}_$fileName';
+    final data = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
     await _sb.storage.from('documents').uploadBinary(
       path,
-      bytes is List<int> ? (bytes as dynamic) : bytes as dynamic,
+      data,
       fileOptions: FileOptions(contentType: mimeType, upsert: false),
     );
     final inserted = await _sb.from('documents').insert({
