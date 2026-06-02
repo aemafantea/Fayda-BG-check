@@ -21,15 +21,41 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    setState(() { _loading = true; _err = null; });
+    setState(() {
+      _loading = true;
+      _err = null;
+    });
     try {
-      await ref.read(authRepositoryProvider).signIn(_email.text.trim(), _password.text);
+      await ref
+          .read(authRepositoryProvider)
+          .signIn(_email.text.trim(), _password.text);
       if (mounted) context.go('/home');
     } catch (e) {
-      setState(() => _err = e.toString());
+      setState(() => _err = _humanize(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  String _humanize(Object e) {
+    final s = e.toString();
+    if (s.contains('Invalid login credentials')) {
+      return 'Wrong email or password.';
+    }
+    if (s.contains('Email not confirmed')) {
+      return 'Please confirm your email first (check your inbox).';
+    }
+    if (s.contains('Network')) {
+      return 'Network error. Check your connection.';
+    }
+    return s.replaceFirst('AuthException(', '').replaceAll(')', '');
+  }
+
+  void _fillDemo(String role) {
+    setState(() {
+      _email.text = 'fayda.demo.$role@gmail.com';
+      _password.text = 'Demo@1234';
+    });
   }
 
   @override
@@ -47,53 +73,75 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Container(
-                      width: 64, height: 64, alignment: Alignment.center,
-                      decoration: BoxDecoration(color: AppTheme.primary.withOpacity(.1),
+                      width: 64,
+                      height: 64,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                          color: AppTheme.primary.withOpacity(.1),
                           borderRadius: BorderRadius.circular(16)),
-                      child: const Icon(Icons.verified_user, color: AppTheme.primary, size: 32),
+                      child: const Icon(Icons.verified_user,
+                          color: AppTheme.primary, size: 32),
                     ),
                     const SizedBox(height: 16),
                     const Text('Welcome back',
-                        style: TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
+                        style: TextStyle(
+                            fontSize: 26, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 4),
-                    const Text('Sign in to continue your background checks',
+                    const Text(
+                        'Sign in to continue your background checks',
                         style: TextStyle(color: AppTheme.textSecondary)),
                     const SizedBox(height: 32),
                     TextFormField(
                       controller: _email,
                       keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(labelText: 'Email',
+                      autocorrect: false,
+                      textInputAction: TextInputAction.next,
+                      decoration: const InputDecoration(
+                          labelText: 'Email',
                           prefixIcon: Icon(Icons.mail_outline)),
-                      validator: (v) => v == null || !v.contains('@') ? 'Enter a valid email' : null,
+                      validator: (v) =>
+                          v == null || !v.contains('@') ? 'Enter a valid email' : null,
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
                       controller: _password,
                       obscureText: _obscure,
+                      onFieldSubmitted: (_) => _submit(),
                       decoration: InputDecoration(
                         labelText: 'Password',
                         prefixIcon: const Icon(Icons.lock_outline),
                         suffixIcon: IconButton(
-                          icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
-                          onPressed: () => setState(() => _obscure = !_obscure),
+                          icon: Icon(_obscure
+                              ? Icons.visibility
+                              : Icons.visibility_off),
+                          onPressed: () =>
+                              setState(() => _obscure = !_obscure),
                         ),
                       ),
-                      validator: (v) => v == null || v.length < 6 ? 'Min 6 characters' : null,
+                      validator: (v) =>
+                          v == null || v.length < 6 ? 'Min 6 characters' : null,
                     ),
                     if (_err != null) ...[
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(color: AppTheme.danger.withOpacity(.1),
-                            borderRadius: BorderRadius.circular(8)),
-                        child: Text(_err!, style: const TextStyle(color: AppTheme.danger)),
+                        decoration: BoxDecoration(
+                          color: AppTheme.danger.withOpacity(.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(_err!,
+                            style: const TextStyle(color: AppTheme.danger)),
                       ),
                     ],
                     const SizedBox(height: 24),
                     FilledButton(
                       onPressed: _loading ? null : _submit,
                       child: _loading
-                          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                  color: Colors.white, strokeWidth: 2))
                           : const Text('Sign in'),
                     ),
                     const SizedBox(height: 12),
@@ -105,6 +153,27 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                           onPressed: () => context.go('/auth/sign-up'),
                           child: const Text('Sign up'),
                         ),
+                      ],
+                    ),
+                    const Divider(height: 32),
+                    const Text('Quick fill demo account',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            color: AppTheme.textSecondary, fontSize: 12)),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 8,
+                      children: [
+                        OutlinedButton(
+                            onPressed: () => _fillDemo('candidate'),
+                            child: const Text('Candidate')),
+                        OutlinedButton(
+                            onPressed: () => _fillDemo('hr'),
+                            child: const Text('HR')),
+                        OutlinedButton(
+                            onPressed: () => _fillDemo('admin'),
+                            child: const Text('Admin')),
                       ],
                     ),
                   ],
