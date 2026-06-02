@@ -1,0 +1,43 @@
+## Environment
+.env
+.env.local
+**/.env
+
+## Flutter
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/.pub-cache/
+app/.pub/
+app/build/
+app/**/build/
+app/**/.gradle/
+app/**/Pods/
+app/**/Flutter/Flutter.framework
+app/**/Flutter/Flutter.podspec
+app/ios/Runner.xcworkspace/xcuserdata/
+app/ios/Runner.xcodeproj/xcuserdata/
+app/macos/Flutter/ephemeral/
+app/windows/flutter/ephemeral/
+app/linux/flutter/ephemeral/
+app/**/*.g.dart
+app/**/*.freezed.dart
+
+## IDE
+.idea/
+.vscode/
+*.iml
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Supabase
+supabase/.branches
+supabase/.temp
+supabase/.env
+
+## Misc
+*.log
+coverage/
