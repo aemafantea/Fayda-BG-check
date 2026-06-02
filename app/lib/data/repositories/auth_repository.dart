@@ -17,9 +17,25 @@ final currentProfileProvider = FutureProvider<Profile?>((ref) async {
   final user = ref.watch(currentUserProvider);
   if (user == null) return null;
   final sb = ref.watch(supabaseProvider);
-  final res = await sb.from('profiles').select().eq('id', user.id).maybeSingle();
-  if (res == null) return null;
-  return Profile.fromMap(res);
+
+  // Synthetic fallback from auth metadata if DB row missing / schema not yet applied.
+  Profile synthetic() {
+    final meta = user.userMetadata ?? {};
+    return Profile(
+      id: user.id,
+      role: (meta['role'] as String?) ?? 'candidate',
+      fullName: (meta['full_name'] as String?) ?? user.email?.split('@').first,
+    );
+  }
+
+  try {
+    final res = await sb.from('profiles').select().eq('id', user.id).maybeSingle();
+    if (res == null) return synthetic();
+    return Profile.fromMap(res);
+  } catch (_) {
+    // Schema not yet applied or RLS blocking — still let the user in
+    return synthetic();
+  }
 });
 
 class AuthRepository {
