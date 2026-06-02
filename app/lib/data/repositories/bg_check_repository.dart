@@ -4,30 +4,95 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/models.dart';
 import 'auth_repository.dart';
 
+/// Whether the current error indicates the Supabase schema hasn't been applied yet.
+bool _isSchemaMissing(Object e) {
+  final s = e.toString().toLowerCase();
+  return s.contains('does not exist') ||
+      s.contains('relation') && s.contains('not') ||
+      s.contains('schema cache') ||
+      s.contains('not found') && s.contains('table') ||
+      s.contains('pgrst') ||
+      s.contains('404');
+}
+
+/// Run [body] and return [fallback] on schema-missing errors instead of throwing.
+/// Other errors are re-thrown so we don't mask real bugs.
+Future<T> _safe<T>(Future<T> Function() body, T fallback) async {
+  try {
+    return await body();
+  } catch (e) {
+    if (_isSchemaMissing(e)) {
+      return fallback;
+    }
+    rethrow;
+  }
+}
+
+/// Read-only signal: was the last DB query blocked by missing schema?
+final dbReadyProvider = StateProvider<bool>((ref) => true);
+
 class BgCheckRepository {
   final SupabaseClient _sb;
-  BgCheckRepository(this._sb);
+  final Ref _ref;
+  BgCheckRepository(this._sb, this._ref);
+
+  void _flagMissing(Object e) {
+    if (_isSchemaMissing(e)) {
+      _ref.read(dbReadyProvider.notifier).state = false;
+    }
+  }
 
   // ---------- Candidate ----------
   Future<Candidate?> getOrCreateCandidate(String profileId) async {
-    final found = await _sb.from('candidates').select().eq('profile_id', profileId).maybeSingle();
-    if (found != null) return Candidate.fromMap(found);
-    final created = await _sb.from('candidates').insert({'profile_id': profileId}).select().single();
-    return Candidate.fromMap(created);
+    try {
+      final found = await _sb
+          .from('candidates')
+          .select()
+          .eq('profile_id', profileId)
+          .maybeSingle();
+      if (found != null) return Candidate.fromMap(found);
+      final created = await _sb
+          .from('candidates')
+          .insert({'profile_id': profileId})
+          .select()
+          .single();
+      return Candidate.fromMap(created);
+    } catch (e) {
+      _flagMissing(e);
+      if (_isSchemaMissing(e)) return null;
+      rethrow;
+    }
   }
 
   Future<Candidate?> getCandidateById(String id) async {
-    final r = await _sb.from('candidates').select().eq('id', id).maybeSingle();
-    return r == null ? null : Candidate.fromMap(r);
+    try {
+      final r = await _sb.from('candidates').select().eq('id', id).maybeSingle();
+      return r == null ? null : Candidate.fromMap(r);
+    } catch (e) {
+      _flagMissing(e);
+      if (_isSchemaMissing(e)) return null;
+      rethrow;
+    }
   }
 
-  Future<void> updateCandidate(String id, Map<String, dynamic> patch) =>
-      _sb.from('candidates').update(patch).eq('id', id);
+  Future<void> updateCandidate(String id, Map<String, dynamic> patch) async {
+    try {
+      await _sb.from('candidates').update(patch).eq('id', id);
+    } catch (e) {
+      _flagMissing(e); rethrow;
+    }
+  }
 
   // ---------- Employment ----------
   Future<List<EmploymentRecord>> listEmployment(String candidateId) async {
-    final rows = await _sb.from('employment_history').select().eq('candidate_id', candidateId).order('start_date', ascending: false);
-    return (rows as List).map((e) => EmploymentRecord.fromMap(e)).toList();
+    return _safe(() async {
+      final rows = await _sb
+          .from('employment_history')
+          .select()
+          .eq('candidate_id', candidateId)
+          .order('start_date', ascending: false);
+      return (rows as List).map((e) => EmploymentRecord.fromMap(e)).toList();
+    }, <EmploymentRecord>[]);
   }
 
   Future<EmploymentRecord> addEmployment(Map<String, dynamic> data) async {
@@ -38,7 +103,8 @@ class BgCheckRepository {
   Future<void> updateEmployment(String id, Map<String, dynamic> patch) =>
       _sb.from('employment_history').update(patch).eq('id', id);
 
-  Future<void> deleteEmployment(String id) => _sb.from('employment_history').delete().eq('id', id);
+  Future<void> deleteEmployment(String id) =>
+      _sb.from('employment_history').delete().eq('id', id);
 
   Future<void> verifyEmployment(String id, String verifierId, String notes) =>
       _sb.from('employment_history').update({
@@ -50,11 +116,13 @@ class BgCheckRepository {
 
   // ---------- Background checks ----------
   Future<List<BackgroundCheck>> listChecks({String? candidateId, String? status}) async {
-    var q = _sb.from('background_checks').select();
-    if (candidateId != null) q = q.eq('candidate_id', candidateId);
-    if (status != null) q = q.eq('status', status);
-    final rows = await q.order('created_at', ascending: false);
-    return (rows as List).map((e) => BackgroundCheck.fromMap(e)).toList();
+    return _safe(() async {
+      var q = _sb.from('background_checks').select();
+      if (candidateId != null) q = q.eq('candidate_id', candidateId);
+      if (status != null) q = q.eq('status', status);
+      final rows = await q.order('created_at', ascending: false);
+      return (rows as List).map((e) => BackgroundCheck.fromMap(e)).toList();
+    }, <BackgroundCheck>[]);
   }
 
   Future<BackgroundCheck> createCheck(Map<String, dynamic> data) async {
@@ -62,9 +130,11 @@ class BgCheckRepository {
     return BackgroundCheck.fromMap(r);
   }
 
-  Future<BackgroundCheck> getCheck(String id) async {
-    final r = await _sb.from('background_checks').select().eq('id', id).single();
-    return BackgroundCheck.fromMap(r);
+  Future<BackgroundCheck?> getCheck(String id) async {
+    return _safe(() async {
+      final r = await _sb.from('background_checks').select().eq('id', id).single();
+      return BackgroundCheck.fromMap(r);
+    }, null);
   }
 
   Future<void> updateCheck(String id, Map<String, dynamic> patch) =>
@@ -77,19 +147,27 @@ class BgCheckRepository {
       }).eq('id', checkId);
 
   Future<Map<String, dynamic>> runRiskScore(String checkId) async {
-    final res = await _sb.functions.invoke('risk-score', body: {'background_check_id': checkId});
+    final res = await _sb.functions.invoke('risk-score',
+        body: {'background_check_id': checkId});
     return (res.data as Map).cast<String, dynamic>();
   }
 
   Future<Map<String, dynamic>> generateReport(String checkId) async {
-    final res = await _sb.functions.invoke('generate-pdf', body: {'background_check_id': checkId});
+    final res = await _sb.functions.invoke('generate-pdf',
+        body: {'background_check_id': checkId});
     return (res.data as Map).cast<String, dynamic>();
   }
 
   // ---------- Documents ----------
   Future<List<AppDocument>> listDocuments(String ownerId) async {
-    final rows = await _sb.from('documents').select().eq('owner_id', ownerId).order('uploaded_at', ascending: false);
-    return (rows as List).map((e) => AppDocument.fromMap(e)).toList();
+    return _safe(() async {
+      final rows = await _sb
+          .from('documents')
+          .select()
+          .eq('owner_id', ownerId)
+          .order('uploaded_at', ascending: false);
+      return (rows as List).map((e) => AppDocument.fromMap(e)).toList();
+    }, <AppDocument>[]);
   }
 
   Future<AppDocument> uploadDocument({
@@ -130,8 +208,10 @@ class BgCheckRepository {
 
   // ---------- References ----------
   Future<List<Map<String, dynamic>>> listReferences(String checkId) async {
-    final rows = await _sb.from('references').select().eq('background_check_id', checkId);
-    return (rows as List).cast<Map<String, dynamic>>();
+    return _safe(() async {
+      final rows = await _sb.from('references').select().eq('background_check_id', checkId);
+      return (rows as List).cast<Map<String, dynamic>>();
+    }, <Map<String, dynamic>>[]);
   }
 
   Future<void> addReference(Map<String, dynamic> data) =>
@@ -142,8 +222,10 @@ class BgCheckRepository {
 
   // ---------- Criminal records ----------
   Future<List<Map<String, dynamic>>> listCriminal(String checkId) async {
-    final rows = await _sb.from('criminal_records').select().eq('background_check_id', checkId);
-    return (rows as List).cast<Map<String, dynamic>>();
+    return _safe(() async {
+      final rows = await _sb.from('criminal_records').select().eq('background_check_id', checkId);
+      return (rows as List).cast<Map<String, dynamic>>();
+    }, <Map<String, dynamic>>[]);
   }
 
   Future<void> addCriminal(Map<String, dynamic> data) =>
@@ -151,20 +233,27 @@ class BgCheckRepository {
 
   // ---------- HR dashboard ----------
   Future<Map<String, dynamic>> dashboardStats() async {
-    final r = await _sb.from('v_hr_dashboard_stats').select().single();
-    return r;
+    return _safe(() async {
+      final r = await _sb.from('v_hr_dashboard_stats').select().single();
+      return r;
+    }, <String, dynamic>{
+      'total_candidates': 0, 'total_checks': 0, 'in_review': 0,
+      'completed': 0, 'high_risk': 0, 'critical_risk': 0, 'fayda_verified': 0,
+    });
   }
 
   Future<List<Map<String, dynamic>>> candidateSummaries({String? search}) async {
-    var q = _sb.from('v_candidate_summary').select();
-    if (search != null && search.isNotEmpty) {
-      q = q.ilike('full_name', '%$search%');
-    }
-    final rows = await q.limit(100);
-    return (rows as List).cast<Map<String, dynamic>>();
+    return _safe(() async {
+      var q = _sb.from('v_candidate_summary').select();
+      if (search != null && search.isNotEmpty) {
+        q = q.ilike('full_name', '%$search%');
+      }
+      final rows = await q.limit(100);
+      return (rows as List).cast<Map<String, dynamic>>();
+    }, <Map<String, dynamic>>[]);
   }
 }
 
 final bgCheckRepoProvider = Provider<BgCheckRepository>(
-  (ref) => BgCheckRepository(ref.watch(supabaseProvider)),
+  (ref) => BgCheckRepository(ref.watch(supabaseProvider), ref),
 );
