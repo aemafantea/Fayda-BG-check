@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/profile.dart';
+import 'bg_check_repository.dart';
 
 final supabaseProvider = Provider<SupabaseClient>((ref) => Supabase.instance.client);
 
@@ -13,12 +14,19 @@ final currentUserProvider = Provider<User?>((ref) {
   return ref.watch(supabaseProvider).auth.currentUser;
 });
 
+bool _schemaMissing(Object e) {
+  final s = e.toString().toLowerCase();
+  return s.contains('does not exist') ||
+      s.contains('schema cache') ||
+      s.contains('pgrst') ||
+      s.contains('relation');
+}
+
 final currentProfileProvider = FutureProvider<Profile?>((ref) async {
   final user = ref.watch(currentUserProvider);
   if (user == null) return null;
   final sb = ref.watch(supabaseProvider);
 
-  // Synthetic fallback from auth metadata if DB row missing / schema not yet applied.
   Profile synthetic() {
     final meta = user.userMetadata ?? {};
     return Profile(
@@ -30,11 +38,16 @@ final currentProfileProvider = FutureProvider<Profile?>((ref) async {
 
   try {
     final res = await sb.from('profiles').select().eq('id', user.id).maybeSingle();
+    ref.read(dbReadyProvider.notifier).state = true;
     if (res == null) return synthetic();
     return Profile.fromMap(res);
-  } catch (_) {
-    // Schema not yet applied or RLS blocking — still let the user in
-    return synthetic();
+  } catch (e) {
+    if (_schemaMissing(e)) {
+      ref.read(dbReadyProvider.notifier).state = false;
+      return synthetic();
+    }
+    // Real error — propagate so the error screen shows
+    rethrow;
   }
 });
 
