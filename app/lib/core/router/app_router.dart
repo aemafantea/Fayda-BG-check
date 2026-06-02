@@ -31,9 +31,20 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     redirect: (ctx, state) {
       final session = Supabase.instance.client.auth.currentSession;
       final loc = state.matchedLocation;
-      final isAuth = loc.startsWith('/auth') || loc == '/splash';
-      if (session == null && !isAuth) return '/auth/sign-in';
-      if (session != null && loc == '/splash') return '/home';
+
+      // From splash, always jump somewhere
+      if (loc == '/splash') {
+        return session == null ? '/auth/sign-in' : '/home';
+      }
+
+      // Protect non-auth routes
+      final isAuthRoute = loc.startsWith('/auth');
+      if (session == null && !isAuthRoute) return '/auth/sign-in';
+
+      // Already signed in but visiting sign-in/up
+      if (session != null && (loc == '/auth/sign-in' || loc == '/auth/sign-up')) {
+        return '/home';
+      }
       return null;
     },
     routes: [
@@ -77,21 +88,59 @@ class _RouterRefresh extends ChangeNotifier {
   }
 }
 
-class _HomeDispatcher extends ConsumerWidget {
+class _HomeDispatcher extends ConsumerStatefulWidget {
   const _HomeDispatcher();
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final profile = ref.watch(currentProfileProvider);
-    return profile.when(
+  ConsumerState<_HomeDispatcher> createState() => _HomeDispatcherState();
+}
+
+class _HomeDispatcherState extends ConsumerState<_HomeDispatcher> {
+  bool _navigated = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final profileAsync = ref.watch(currentProfileProvider);
+    return profileAsync.when(
       loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Scaffold(body: Center(child: Text('Error: $e'))),
+      error: (e, _) => Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                const SizedBox(height: 12),
+                Text('Could not load profile:\n$e', textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () => ref.invalidate(currentProfileProvider),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    await Supabase.instance.client.auth.signOut();
+                    if (context.mounted) context.go('/auth/sign-in');
+                  },
+                  child: const Text('Sign out'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
       data: (p) {
+        if (_navigated) return const Scaffold(body: SizedBox.shrink());
+        _navigated = true;
+        // Default to candidate if profile row not ready yet (will reconcile after refresh)
+        final target = switch (p?.role) {
+          'admin' => '/admin',
+          'hr'    => '/hr',
+          _       => '/candidate',
+        };
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          switch (p?.role) {
-            case 'admin': context.go('/admin'); break;
-            case 'hr': context.go('/hr'); break;
-            default: context.go('/candidate');
-          }
+          if (mounted) context.go(target);
         });
         return const Scaffold(body: Center(child: CircularProgressIndicator()));
       },
