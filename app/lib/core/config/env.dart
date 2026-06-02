@@ -8,9 +8,10 @@ class Env {
     defaultValue: 'https://dzqinurnkdcwhsbfmzrm.supabase.co',
   );
 
+  // Supabase publishable (anon) key — safe to embed in client code.
   static const String supabaseAnonKey = String.fromEnvironment(
     'SUPABASE_ANON_KEY',
-    defaultValue: 'REPLACE_WITH_YOUR_ANON_KEY',
+    defaultValue: 'sb_publishable_n1NaCnYoEBYowZlvZ3TGlQ_kzMuzZa9',
   );
 
   static const String faydaRedirectScheme = String.fromEnvironment(
